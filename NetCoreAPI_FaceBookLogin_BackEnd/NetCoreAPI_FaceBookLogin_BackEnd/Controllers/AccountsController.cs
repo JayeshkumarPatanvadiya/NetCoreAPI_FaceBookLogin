@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NetCoreAPI_FaceBookLogin_BackEnd.Data;
 using NetCoreAPI_FaceBookLogin_BackEnd.Helpers;
@@ -28,8 +29,10 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
         private readonly JwtIssuerOptions _jwtOptions;
         private static readonly HttpClient Client = new HttpClient();
         private readonly FacebookAuthSettings _fbAuthSettings;
+        private readonly ILogger _logger;
 
-        public AccountsController(IOptions<FacebookAuthSettings> fbAuthSettingsAccessor,UserManager<AppUser> userManager, IJwtFactory jwtFactory, IOptions<JwtIssuerOptions> jwtOptions, IMapper mapper, ApplicationDbContext appDbContext)
+
+        public AccountsController(ILogger<AccountsController> logger,IOptions<FacebookAuthSettings> fbAuthSettingsAccessor,UserManager<AppUser> userManager, IJwtFactory jwtFactory, IOptions<JwtIssuerOptions> jwtOptions, IMapper mapper, ApplicationDbContext appDbContext)
         {
             _userManager = userManager;
             _mapper = mapper;
@@ -37,6 +40,7 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
             _jwtFactory = jwtFactory;
             _jwtOptions = jwtOptions.Value;
             _fbAuthSettings = fbAuthSettingsAccessor.Value;
+            _logger = logger;
         }
         // POST api/accounts
         [HttpPost]
@@ -48,7 +52,7 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
 
 
             var userIdentity = _mapper.Map<AppUser>(model);
-
+            _logger.LogWarning("User account." + userIdentity);
             var result = await _userManager.CreateAsync(userIdentity, model.Password);
 
             if (!result.Succeeded) return new BadRequestObjectResult(Errors.AddErrorsToModelState(result, ModelState));
@@ -94,12 +98,13 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
             return await Task.FromResult<ClaimsIdentity>(null);
         }
 
-
-
         [HttpPost("facebook-login")]
         public async Task<IActionResult> Facebook([FromBody] FacebookAuthViewModel model)
         {
             // 1.generate an app access token
+            var test = _fbAuthSettings.AppId;
+            var test2 = _fbAuthSettings.AppSecret;
+
             var appAccessTokenResponse = await Client.GetStringAsync($"https://graph.facebook.com/oauth/access_token?client_id={_fbAuthSettings.AppId}&client_secret={_fbAuthSettings.AppSecret}&grant_type=client_credentials");
             var appAccessToken = JsonConvert.DeserializeObject<FacebookAppAccessToken>(appAccessTokenResponse);
             // 2. validate the user access token

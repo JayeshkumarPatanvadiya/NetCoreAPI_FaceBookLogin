@@ -11,6 +11,7 @@
 using System;
 using System.Reflection;
 
+[assembly: Microsoft.Extensions.Configuration.UserSecrets.UserSecretsIdAttribute("c52c8c7d-96ff-48ca-abef-03de19b0feca")]
 [assembly: System.Reflection.AssemblyCompanyAttribute("NetCoreAPI_FaceBookLogin_BackEnd")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
