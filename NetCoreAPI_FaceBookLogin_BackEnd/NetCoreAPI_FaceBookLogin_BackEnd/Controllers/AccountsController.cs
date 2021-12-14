@@ -12,8 +12,12 @@ using NetCoreAPI_FaceBookLogin_BackEnd.ViewModal;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Security.Claims;
 using System.Threading.Tasks;
 
@@ -32,7 +36,7 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
         private readonly ILogger _logger;
 
 
-        public AccountsController(ILogger<AccountsController> logger,IOptions<FacebookAuthSettings> fbAuthSettingsAccessor,UserManager<AppUser> userManager, IJwtFactory jwtFactory, IOptions<JwtIssuerOptions> jwtOptions, IMapper mapper, ApplicationDbContext appDbContext)
+        public AccountsController(ILogger<AccountsController> logger, IOptions<FacebookAuthSettings> fbAuthSettingsAccessor, UserManager<AppUser> userManager, IJwtFactory jwtFactory, IOptions<JwtIssuerOptions> jwtOptions, IMapper mapper, ApplicationDbContext appDbContext)
         {
             _userManager = userManager;
             _mapper = mapper;
@@ -48,8 +52,34 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
         {
             var userExists = await _userManager.FindByNameAsync(model.FirstName);
             if (userExists != null)
-                return StatusCode(StatusCodes.Status500InternalServerError, new BadHttpRequestException ("User Already exists"));
+                return StatusCode(StatusCodes.Status500InternalServerError, new BadHttpRequestException("User Already exists"));
+           
+            String address = "";
+            WebRequest request = WebRequest.Create("http://checkip.dyndns.org/");
+            using (WebResponse response = request.GetResponse())
+            using (StreamReader stream = new StreamReader(response.GetResponseStream()))
+            {
+                address = stream.ReadToEnd();
+            }
 
+            int first = address.IndexOf("Address: ") + 9;
+            int last = address.LastIndexOf("</body>");
+            address = address.Substring(first, last - first);
+
+            IpInfo ipInfo = new IpInfo();
+            try
+            {
+                string ip = address;
+                string info = new WebClient().DownloadString("http://ipinfo.io/" + ip);
+                ipInfo = JsonConvert.DeserializeObject<IpInfo>(info);
+                RegionInfo myRI1 = new RegionInfo(ipInfo.Country);
+                ipInfo.Country = myRI1.EnglishName;
+                model.Location = ipInfo.City;
+            }
+            catch (Exception ex)
+            {
+                ipInfo.Country = null;
+            }
 
             var userIdentity = _mapper.Map<AppUser>(model);
             _logger.LogWarning("User account." + userIdentity);
@@ -63,10 +93,11 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
             return new OkObjectResult("Account created");
         }
 
+
         [HttpPost("login")]
         public async Task<IActionResult> Post([FromBody] CredentialsViewModel credentials)
         {
-         
+
 
             var identity = await GetClaimsIdentity(credentials.UserName, credentials.Password);
             if (identity == null)
