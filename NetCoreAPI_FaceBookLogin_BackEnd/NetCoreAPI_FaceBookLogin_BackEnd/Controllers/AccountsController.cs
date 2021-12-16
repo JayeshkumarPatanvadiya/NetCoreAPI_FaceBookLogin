@@ -63,8 +63,6 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
 
             try
             {
-                #region Get Location name based on public ip
-
                 string address = "";
                 WebRequest request = WebRequest.Create(_config.GetValue<string>("PublicIpWebsite"));
                 using (WebResponse response = request.GetResponse())
@@ -91,15 +89,12 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
                 {
                     return new BadRequestObjectResult(ex.Message);
                 }
-                #endregion
 
                 var userIdentity = _mapper.Map<AppUser>(model);
                 _logger.LogWarning("User account." + userIdentity);
                 var result = await _userManager.CreateAsync(userIdentity, model.Password);
 
                 if (!result.Succeeded) return new BadRequestObjectResult(Errors.AddErrorsToModelState(result, ModelState));
-
-                #region
 
                 //send confirmation email
 
@@ -115,10 +110,7 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
                 await SendEmailAsync(callback, userIdentity.Email);
                 await _appDbContext.Customers.AddAsync(new Customer { IdentityId = userIdentity.Id, Location = model.Location });
                 await _appDbContext.SaveChangesAsync();
-
                 return new OkObjectResult("Account created");
-                #endregion
-
             }
             catch (Exception ex)
             {
@@ -153,7 +145,6 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
 
         }
 
-
         [HttpPost("EmailConfirmation")]
         public async Task<IActionResult> EmailConfirmation([FromQuery] string email, [FromQuery] string token)
         {
@@ -165,6 +156,7 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
                 return BadRequest("Invalid Email Confirmation Request");
             return Ok();
         }
+
         [HttpPost("login")]
         public async Task<IActionResult> Post([FromBody] CredentialsViewModel credentials)
         {
@@ -186,8 +178,10 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
 
             // get the user to verifty
             var userToVerify = await _userManager.FindByNameAsync(userName);
-
             if (userToVerify == null) return await Task.FromResult<ClaimsIdentity>(null);
+
+            var emailConfirmUser = await _userManager.IsEmailConfirmedAsync(userToVerify);
+            if (emailConfirmUser == false) return await Task.FromResult<ClaimsIdentity>(null);
 
             // check the credentials
             if (await _userManager.CheckPasswordAsync(userToVerify, password))
@@ -257,7 +251,6 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
 
             return new OkObjectResult(jwt);
         }
-
 
         [HttpGet]
         public async Task<IActionResult> GetListOfUsers()
