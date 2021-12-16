@@ -33,6 +33,8 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            services.Configure<MailSettings>(Configuration.GetSection("MailSettings"));
+
             // Add framework services.
             services.AddAutoMapper(typeof(Startup).Assembly);
 
@@ -94,7 +96,19 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd
             {
                 options.AddPolicy("ApiUser", policy => policy.RequireClaim(Constants.Strings.JwtClaimIdentifiers.Rol, Constants.Strings.JwtClaims.ApiAccess));
             });
-            
+
+            services.AddCors(options =>
+            {
+                options.AddPolicy(
+                    name: "AllowOrigin",
+                    builder => {
+                        builder.AllowAnyOrigin()
+                                .AllowAnyMethod()
+                                .AllowAnyHeader();
+                    });
+            });
+
+
             // add identity
             var builder = services.AddIdentityCore<AppUser>(o =>
             {
@@ -113,6 +127,7 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
+            app.UseCors("AllowOrigin");
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();

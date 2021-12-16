@@ -2,6 +2,9 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NetCoreAPI_FaceBookLogin_BackEnd.Data;
@@ -14,10 +17,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
+using System.Net.Mail;
 using System.Security.Claims;
 using System.Threading.Tasks;
 
@@ -34,10 +36,13 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
         private static readonly HttpClient Client = new HttpClient();
         private readonly FacebookAuthSettings _fbAuthSettings;
         private readonly ILogger _logger;
+        private readonly MailSettings _mailSettings;
+        private readonly IConfiguration _config;
 
 
-        public AccountsController(ILogger<AccountsController> logger, IOptions<FacebookAuthSettings> fbAuthSettingsAccessor, UserManager<AppUser> userManager, IJwtFactory jwtFactory, IOptions<JwtIssuerOptions> jwtOptions, IMapper mapper, ApplicationDbContext appDbContext)
+        public AccountsController(IConfiguration config, IOptions<MailSettings> mailSettings, ILogger<AccountsController> logger, IOptions<FacebookAuthSettings> fbAuthSettingsAccessor, UserManager<AppUser> userManager, IJwtFactory jwtFactory, IOptions<JwtIssuerOptions> jwtOptions, IMapper mapper, ApplicationDbContext appDbContext)
         {
+            _config = config;
             _userManager = userManager;
             _mapper = mapper;
             _appDbContext = appDbContext;
@@ -45,67 +50,132 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
             _jwtOptions = jwtOptions.Value;
             _fbAuthSettings = fbAuthSettingsAccessor.Value;
             _logger = logger;
+            _mailSettings = mailSettings.Value;
+
         }
         // POST api/accounts
-        [HttpPost]
+        [HttpPost("register")]
         public async Task<IActionResult> Post([FromBody] RegistrationViewModel model)
         {
-            var userExists = await _userManager.FindByNameAsync(model.FirstName);
+            var userExists = await _userManager.FindByNameAsync(model.Email);
             if (userExists != null)
                 return StatusCode(StatusCodes.Status500InternalServerError, new BadHttpRequestException("User Already exists"));
-           
-            String address = "";
-            WebRequest request = WebRequest.Create("http://checkip.dyndns.org/");
-            using (WebResponse response = request.GetResponse())
-            using (StreamReader stream = new StreamReader(response.GetResponseStream()))
-            {
-                address = stream.ReadToEnd();
-            }
 
-            int first = address.IndexOf("Address: ") + 9;
-            int last = address.LastIndexOf("</body>");
-            address = address.Substring(first, last - first);
-
-            IpInfo ipInfo = new IpInfo();
             try
             {
-                string ip = address;
-                string info = new WebClient().DownloadString("http://ipinfo.io/" + ip);
-                ipInfo = JsonConvert.DeserializeObject<IpInfo>(info);
-                RegionInfo myRI1 = new RegionInfo(ipInfo.Country);
-                ipInfo.Country = myRI1.EnglishName;
-                model.Location = ipInfo.City;
+                #region Get Location name based on public ip
+
+                string address = "";
+                WebRequest request = WebRequest.Create(_config.GetValue<string>("PublicIpWebsite"));
+                using (WebResponse response = request.GetResponse())
+                using (StreamReader stream = new StreamReader(response.GetResponseStream()))
+                {
+                    address = stream.ReadToEnd();
+                }
+
+                int first = address.IndexOf("Address: ") + 9;
+                int last = address.LastIndexOf("</body>");
+                address = address.Substring(first, last - first);
+
+                IpInfo ipInfo = new IpInfo();
+                try
+                {
+                    string ip = address;
+                    string info = new WebClient().DownloadString(_config.GetValue<string>("IPLocation") + ip);
+                    ipInfo = JsonConvert.DeserializeObject<IpInfo>(info);
+                    RegionInfo myRI1 = new RegionInfo(ipInfo.Country);
+                    ipInfo.Country = myRI1.EnglishName;
+                    model.Location = ipInfo.City;
+                }
+                catch (Exception ex)
+                {
+                    return new BadRequestObjectResult(ex.Message);
+                }
+                #endregion
+
+                var userIdentity = _mapper.Map<AppUser>(model);
+                _logger.LogWarning("User account." + userIdentity);
+                var result = await _userManager.CreateAsync(userIdentity, model.Password);
+
+                if (!result.Succeeded) return new BadRequestObjectResult(Errors.AddErrorsToModelState(result, ModelState));
+
+                #region
+
+                //send confirmation email
+
+                var token = await _userManager.GenerateEmailConfirmationTokenAsync(userIdentity);
+                var param = new Dictionary<string, string>
+    {
+        {"token", token },
+        {"email", userIdentity.Email }
+    };
+
+                var callback = QueryHelpers.AddQueryString(_config.GetValue<string>("FrontEndURL"), param);
+                //await _userManager.AddToRoleAsync(userIdentity, "Viewer");
+                await SendEmailAsync(callback, userIdentity.Email);
+                await _appDbContext.Customers.AddAsync(new Customer { IdentityId = userIdentity.Id, Location = model.Location });
+                await _appDbContext.SaveChangesAsync();
+
+                return new OkObjectResult("Account created");
+                #endregion
+
             }
             catch (Exception ex)
             {
-                ipInfo.Country = null;
+                return new BadRequestObjectResult(ex.Message);
             }
+        }
 
-            var userIdentity = _mapper.Map<AppUser>(model);
-            _logger.LogWarning("User account." + userIdentity);
-            var result = await _userManager.CreateAsync(userIdentity, model.Password);
+        public Task SendEmailAsync(string callback, string email)
+        {
+            #region Send Email
 
-            if (!result.Succeeded) return new BadRequestObjectResult(Errors.AddErrorsToModelState(result, ModelState));
+            var fromMail = new MailAddress(_mailSettings.Mail, _mailSettings.DisplayName); // set your email    
+            var fromEmailpassword = _mailSettings.Password; // Set your password     
+            var toEmail = new MailAddress(email);
+            var smtp = new SmtpClient();
+            smtp.Host = _mailSettings.Host;
+            smtp.Port = _mailSettings.Port;
+            smtp.EnableSsl = true;
+            smtp.DeliveryMethod = SmtpDeliveryMethod.Network;
+            smtp.UseDefaultCredentials = false;
+            smtp.Credentials = new NetworkCredential(fromMail.Address, fromEmailpassword);
 
-            await _appDbContext.Customers.AddAsync(new Customer { IdentityId = userIdentity.Id, Location = model.Location });
-            await _appDbContext.SaveChangesAsync();
+            var Message = new MailMessage(fromMail, toEmail);
+            // Add a carbon copy recipient.
+            Message.Subject = _config.GetValue<string>("EmailConfirmSubject");
+            Message.Body = callback;
+            Message.IsBodyHtml = true;
+            smtp.Send(Message);
+            return Task.FromResult<object>(null);
+            #endregion
 
-            return new OkObjectResult("Account created");
+
         }
 
 
+        [HttpPost("EmailConfirmation")]
+        public async Task<IActionResult> EmailConfirmation([FromQuery] string email, [FromQuery] string token)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+                return BadRequest("Invalid Email Confirmation Request");
+            var confirmResult = await _userManager.ConfirmEmailAsync(user, token);
+            if (!confirmResult.Succeeded)
+                return BadRequest("Invalid Email Confirmation Request");
+            return Ok();
+        }
         [HttpPost("login")]
         public async Task<IActionResult> Post([FromBody] CredentialsViewModel credentials)
         {
 
-
-            var identity = await GetClaimsIdentity(credentials.UserName, credentials.Password);
+            var identity = await GetClaimsIdentity(credentials.Email, credentials.Password);
             if (identity == null)
             {
                 return BadRequest(Errors.AddErrorToModelState("login_failure", "Invalid username or password.", ModelState));
             }
 
-            var jwt = await Tokens.GenerateJwt(identity, _jwtFactory, credentials.UserName, _jwtOptions, new JsonSerializerSettings { Formatting = Formatting.Indented });
+            var jwt = await Tokens.GenerateJwt(identity, _jwtFactory, credentials.Email, _jwtOptions, new JsonSerializerSettings { Formatting = Formatting.Indented });
             return new OkObjectResult(jwt);
         }
 
@@ -186,6 +256,14 @@ namespace NetCoreAPI_FaceBookLogin_BackEnd.Controllers
               _jwtFactory, localUser.UserName, _jwtOptions, new JsonSerializerSettings { Formatting = Formatting.Indented });
 
             return new OkObjectResult(jwt);
+        }
+
+
+        [HttpGet]
+        public async Task<IActionResult> GetListOfUsers()
+        {
+            var users = await _userManager.Users.ToListAsync();
+            return new OkObjectResult(users);
         }
     }
 }
